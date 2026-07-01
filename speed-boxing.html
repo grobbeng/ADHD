@@ -97,7 +97,7 @@
       <div id="combo"></div>
     </div>
   </div>
-  <div id="hint">Punch the ball</div>
+  <div id="hint">Punch the bag — alternate sides to keep it spinning</div>
   <canvas id="bag"></canvas>
 
 <script>
@@ -121,66 +121,60 @@
     pivot.x = W / 2;
   }
 
-  // ---- pivot / rope / ball state ----
-  const pivot = { x: 0, y: 26 };
-  const ROPE_LEN = 190;
-  const BALL_R = 58;
-  const GRAVITY = 9.0;      // angular gravity term (g/L baked in)
-  const DAMPING = 0.55;     // air resistance
-  const K_STRETCH = 40;     // rope stiffness pulling back to ROPE_LEN
+  // ---- mount / swivel / bag geometry ----
+  const pivot = { x: 0, y: 24 };   // top mounting platform
+  const SWIVEL_LEN = 66;           // short rigid swivel arm (real speed bags hang tight, not on a long chain)
+  const BAG_W = 96;                // max belly width
+  const BAG_H = 150;               // neck-to-tip height
 
-  let theta = 0;            // angle from vertical (radians)
-  let omega = 0;            // angular velocity
-  let ropeLen = ROPE_LEN;   // current rope length (for punch "stretch/snap")
-  let ropeVel = 0;
+  // ---- spherical-pendulum physics: two independent axes at the same
+  // natural frequency produce the tight elliptical "orbit" a real speed
+  // bag settles into once it's rhythmically hit from alternating sides ----
+  const W0 = 13.5;      // angular stiffness (rad/s) — short swivel = fast, snappy oscillation
+  const DAMPING = 3.0;  // decay rate — settles in ~1-1.5s, like a real bag between combos
+  const MAX_ANGLE = 1.05; // soft clamp (~60deg) so it can't flip past horizontal
 
-  let spin = 0;             // visual spin of the ball texture
-  let spinVel = 0;
+  let ax = 0, avx = 0;   // left-right swing
+  let ay = 0, avy = 0;   // toward/away "orbit" component (rendered as depth+bob)
 
-  let squash = 1;           // squash/stretch on impact
-  let squashVel = 0;
+  let spin = 0, spinVel = 0;      // texture spin so seams tumble with real motion
+  let squash = 1, squashVel = 0;  // impact squash/stretch
 
   let hits = 0;
   let combo = 0;
   let lastHitTime = 0;
 
-  function ballPos() {
+  function bagPos() {
+    const depthScale = 1 + 0.22 * Math.sin(ay);
     return {
-      x: pivot.x + Math.sin(theta) * ropeLen,
-      y: pivot.y + Math.cos(theta) * ropeLen
+      x: pivot.x + Math.sin(ax) * SWIVEL_LEN,
+      y: pivot.y + Math.cos(ax) * SWIVEL_LEN * 0.35 + SWIVEL_LEN * 0.65 + Math.sin(ay) * 14,
+      depthScale
     };
   }
 
   function punch(clickX, clickY) {
-    const b = ballPos();
+    const b = bagPos();
     const dx = clickX - b.x;
     const dy = clickY - b.y;
     const dist = Math.hypot(dx, dy);
-    if (dist > BALL_R * 1.6) return false; // missed
+    if (dist > Math.max(BAG_W, BAG_H) * 0.7) return false; // missed
 
-    // tangential direction at the ball (perpendicular to the rope)
-    const tx = Math.cos(theta);
-    const ty = -Math.sin(theta);
-
-    // push direction: away from where the user clicked, relative to ball center
+    // push direction: away from where the user clicked, relative to bag center
     let px = -dx, py = -dy;
     const plen = Math.hypot(px, py) || 1;
     px /= plen; py /= plen;
 
-    const tangentialForce = px * tx + py * ty;
-    const STRENGTH = 6.5;
-    omega += tangentialForce * STRENGTH;
+    const STRENGTH = 10.5;
+    avx += px * STRENGTH;
+    avy += (py * 0.55 + (Math.random() - 0.5) * 0.4) * STRENGTH * 0.5;
 
-    // radial "give" — the rope stretches slightly on impact, like real elastic hangs
-    const radial = -(px * Math.sin(theta) + py * Math.cos(theta));
-    ropeVel += radial * 30;
-
-    spinVel += (Math.random() > 0.5 ? 1 : -1) * (4 + Math.random() * 4);
-    squashVel += 6;
+    spinVel += (px >= 0 ? 1 : -1) * (5 + Math.random() * 5);
+    squashVel += 7;
 
     hits++;
     const now = performance.now();
-    combo = (now - lastHitTime < 900) ? combo + 1 : 1;
+    combo = (now - lastHitTime < 700) ? combo + 1 : 1;
     lastHitTime = now;
     hitsEl.textContent = hits;
     comboEl.textContent = combo > 1 ? combo + 'x COMBO' : '';
@@ -193,7 +187,7 @@
   // ---- impact ring particles for juice ----
   const rings = [];
   function spawnImpactRing(x, y) {
-    rings.push({ x, y, r: BALL_R * 0.6, alpha: 0.9 });
+    rings.push({ x, y, r: BAG_W * 0.4, alpha: 0.9 });
   }
 
   // ---- input ----
@@ -217,22 +211,25 @@
     lastT = now;
     dt = Math.min(dt, 0.033);
 
-    // pendulum angular dynamics
-    const angAccel = -(GRAVITY / (ropeLen / 100)) * Math.sin(theta) - DAMPING * omega;
-    omega += angAccel * dt;
-    theta += omega * dt;
+    // two decoupled SHM axes at equal frequency -> elliptical orbit motion
+    const axAccel = -(W0 * W0) * ax - DAMPING * avx;
+    avx += axAccel * dt;
+    ax += avx * dt;
+    if (ax > MAX_ANGLE) { ax = MAX_ANGLE; avx *= -0.4; }
+    if (ax < -MAX_ANGLE) { ax = -MAX_ANGLE; avx *= -0.4; }
 
-    // rope length spring back to rest length
-    const ropeAccel = -K_STRETCH * (ropeLen - ROPE_LEN) - 8 * ropeVel;
-    ropeVel += ropeAccel * dt;
-    ropeLen += ropeVel * dt;
+    const ayAccel = -(W0 * W0) * ay - DAMPING * avy;
+    avy += ayAccel * dt;
+    ay += avy * dt;
+    if (ay > MAX_ANGLE) { ay = MAX_ANGLE; avy *= -0.4; }
+    if (ay < -MAX_ANGLE) { ay = -MAX_ANGLE; avy *= -0.4; }
 
     // spin decay
-    spinVel *= 0.96;
+    spinVel *= 0.94;
     spin += spinVel * dt;
 
     // squash decay (spring back to 1)
-    const squashAccel = -50 * (squash - 1) - 6 * squashVel;
+    const squashAccel = -60 * (squash - 1) - 7 * squashVel;
     squashVel += squashAccel * dt;
     squash += squashVel * dt;
 
@@ -240,37 +237,29 @@
     requestAnimationFrame(step);
   }
 
-  function drawChain(x1, y1, x2, y2) {
-    const segs = 8;
+  function drawSwivel(x1, y1, x2, y2) {
     ctx.save();
     ctx.strokeStyle = '#3a3a3a';
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
     ctx.beginPath();
-    for (let i = 0; i <= segs; i++) {
-      const t = i / segs;
-      const x = x1 + (x2 - x1) * t;
-      const y = y1 + (y2 - y1) * t;
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
     ctx.stroke();
 
-    // link glints
-    ctx.fillStyle = '#555';
-    for (let i = 1; i < segs; i += 2) {
-      const t = i / segs;
-      const x = x1 + (x2 - x1) * t;
-      const y = y1 + (y2 - y1) * t;
-      ctx.beginPath();
-      ctx.arc(x, y, 2.4, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    // metal swivel ring where the strap meets the bag
+    ctx.strokeStyle = '#666';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(x2, y2, 5, 3.5, Math.atan2(y2 - y1, x2 - x1), 0, Math.PI * 2);
+    ctx.stroke();
     ctx.restore();
   }
 
   function draw() {
     ctx.clearRect(0, 0, W, H);
 
-    // mount bracket at top
+    // mount platform bracket at top
     ctx.save();
     ctx.fillStyle = '#111';
     ctx.strokeStyle = '#00F7FF';
@@ -282,30 +271,32 @@
     ctx.stroke();
     ctx.restore();
 
-    const b = ballPos();
+    const b = bagPos();
 
-    // drop shadow on "floor" glow beneath, scaled by proximity
+    // drop shadow on "floor" glow beneath
     const floorY = H - 40;
-    const shadowScale = Math.max(0.25, 1 - (floorY - b.y) / (H));
+    const shadowScale = Math.max(0.25, 1 - (floorY - b.y) / H);
     ctx.save();
     ctx.globalAlpha = 0.35 * shadowScale;
-    const grad = ctx.createRadialGradient(b.x, floorY, 5, b.x, floorY, BALL_R * 1.3);
+    const grad = ctx.createRadialGradient(b.x, floorY, 5, b.x, floorY, BAG_W * 1.3);
     grad.addColorStop(0, '#FA00FF');
     grad.addColorStop(1, 'rgba(250,0,255,0)');
     ctx.fillStyle = grad;
     ctx.beginPath();
-    ctx.ellipse(b.x, floorY, BALL_R * 1.3 * shadowScale, BALL_R * 0.35 * shadowScale, 0, 0, Math.PI * 2);
+    ctx.ellipse(b.x, floorY, BAG_W * 1.3 * shadowScale, BAG_W * 0.35 * shadowScale, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
-    // chain
-    drawChain(pivot.x, 18, b.x, b.y - BALL_R * 0.9);
+    // swivel strap from mount to the bag's neck
+    const neckX = b.x;
+    const neckY = b.y - (BAG_H * 0.5) * b.depthScale;
+    drawSwivel(pivot.x, 18, neckX, neckY);
 
     // impact rings
     for (let i = rings.length - 1; i >= 0; i--) {
       const r = rings[i];
-      r.r += 3.2;
-      r.alpha -= 0.045;
+      r.r += 3.4;
+      r.alpha -= 0.05;
       if (r.alpha <= 0) { rings.splice(i, 1); continue; }
       ctx.save();
       ctx.globalAlpha = r.alpha;
@@ -317,7 +308,7 @@
       ctx.restore();
     }
 
-    drawBall(b.x, b.y);
+    drawBag(b.x, b.y, b.depthScale);
   }
 
   function roundRect(x, y, w, h, r) {
@@ -330,71 +321,81 @@
     ctx.closePath();
   }
 
-  function drawBall(x, y) {
-    const rx = BALL_R * (2 - squash);
-    const ry = BALL_R * squash;
+  // teardrop / pear silhouette matching a real speed bag: narrow neck at
+  // top where the swivel strap attaches, bulging belly, rounded bottom tip
+  function bagPath(w, h) {
+    const hw = w / 2;
+    ctx.beginPath();
+    ctx.moveTo(0, -h / 2); // neck apex
+    ctx.bezierCurveTo(hw * 0.55, -h * 0.35, hw * 0.62, h * 0.15, hw * 0.5, h * 0.42);
+    ctx.bezierCurveTo(hw * 0.42, h * 0.58, hw * 0.18, h * 0.5, 0, h * 0.5);
+    ctx.bezierCurveTo(-hw * 0.18, h * 0.5, -hw * 0.42, h * 0.58, -hw * 0.5, h * 0.42);
+    ctx.bezierCurveTo(-hw * 0.62, h * 0.15, -hw * 0.55, -h * 0.35, 0, -h / 2);
+    ctx.closePath();
+  }
+
+  function drawBag(x, y, depthScale) {
+    const wobble = ax * 0.25; // tilts slightly in the direction of swing, like a real hanging bag
+    const w = BAG_W * depthScale * squash;
+    const h = BAG_H * depthScale * (2 - squash);
 
     ctx.save();
     ctx.translate(x, y);
-    ctx.rotate(theta * 0.15);
+    ctx.rotate(wobble);
 
-    // base sphere: cyan-to-magenta diagonal blend
-    const base = ctx.createLinearGradient(-rx, -ry, rx, ry);
-    base.addColorStop(0, '#00F7FF');
-    base.addColorStop(0.5, '#6A5CFF');
-    base.addColorStop(1, '#FA00FF');
-    ctx.beginPath();
-    ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
-    ctx.fillStyle = base;
-    ctx.fill();
-
-    // rim glow
+    bagPath(w, h);
     ctx.save();
     ctx.clip();
-    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-    ctx.lineWidth = 6;
-    ctx.beginPath();
-    ctx.ellipse(0, 0, rx - 3, ry - 3, 0, 0, Math.PI * 2);
-    ctx.stroke();
 
-    // seam panels (like a real speed bag) — spin with the ball
-    ctx.rotate(spin);
-    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-    ctx.lineWidth = 2.5;
-    for (let i = 0; i < 3; i++) {
-      ctx.save();
-      ctx.rotate((Math.PI / 3) * i);
-      ctx.beginPath();
-      ctx.ellipse(0, 0, rx * 0.98, ry * 0.35, 0, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-    }
-    ctx.restore(); // undo clip+spin
+    // base leather gradient: cyan neck fading to magenta belly
+    const base = ctx.createLinearGradient(0, -h / 2, 0, h / 2);
+    base.addColorStop(0, '#00F7FF');
+    base.addColorStop(0.55, '#7A5CFF');
+    base.addColorStop(1, '#FA00FF');
+    ctx.fillStyle = base;
+    ctx.fillRect(-w, -h, w * 2, h * 2);
 
-    // inner shading for volume (darker lower-right)
-    const shade = ctx.createRadialGradient(rx * 0.25, -ry * 0.3, rx * 0.1, 0, 0, rx * 1.1);
+    // volume shading (darker toward the lower-right edge)
+    const shade = ctx.createRadialGradient(w * 0.2, -h * 0.15, w * 0.1, 0, h * 0.05, w * 1.3);
     shade.addColorStop(0, 'rgba(255,255,255,0)');
     shade.addColorStop(0.7, 'rgba(0,0,0,0)');
-    shade.addColorStop(1, 'rgba(0,0,0,0.45)');
-    ctx.beginPath();
-    ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+    shade.addColorStop(1, 'rgba(0,0,0,0.5)');
     ctx.fillStyle = shade;
-    ctx.fill();
+    ctx.fillRect(-w, -h, w * 2, h * 2);
 
-    // specular highlight (glossy shine)
-    const shine = ctx.createRadialGradient(-rx * 0.35, -ry * 0.45, 1, -rx * 0.35, -ry * 0.45, rx * 0.55);
-    shine.addColorStop(0, 'rgba(255,255,255,0.85)');
-    shine.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.beginPath();
-    ctx.ellipse(-rx * 0.35, -ry * 0.45, rx * 0.5, ry * 0.35, -0.4, 0, Math.PI * 2);
-    ctx.fillStyle = shine;
-    ctx.fill();
-
-    // outer stroke
-    ctx.beginPath();
-    ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+    // horizontal seam band (equator stitching typical of a real speed bag)
+    ctx.save();
+    ctx.translate(0, spin * 6 % (h * 0.15)); // tiny tumble as it spins
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)';
     ctx.lineWidth = 2;
-    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.ellipse(0, h * 0.08, w * 0.5, h * 0.06, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+
+    // bottom cap seam where leather panels meet
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, h * 0.1);
+    ctx.lineTo(0, h * 0.5);
+    ctx.stroke();
+
+    // glossy specular highlight
+    const shine = ctx.createRadialGradient(-w * 0.28, -h * 0.15, 1, -w * 0.28, -h * 0.15, w * 0.5);
+    shine.addColorStop(0, 'rgba(255,255,255,0.8)');
+    shine.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = shine;
+    ctx.fillRect(-w, -h, w * 2, h * 2);
+
+    ctx.restore(); // undo clip
+
+    // outer silhouette stroke
+    bagPath(w, h);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(0,0,0,0.55)';
     ctx.stroke();
 
     ctx.restore();
