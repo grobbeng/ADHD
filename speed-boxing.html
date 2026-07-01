@@ -144,17 +144,26 @@
   let combo = 0;
   let lastHitTime = 0;
 
-  function bagPos() {
-    const depthScale = 1 + 0.22 * Math.sin(ay);
+  // The bag is a rigid body hanging from the neck (swivel attachment).
+  // Rotation happens AT the neck, not the belly center — exactly like a
+  // real pendulum bob — so the tip sweeps a wide arc while the neck stays
+  // pinned near the swivel. ay adds a small extra lean, giving the whole
+  // body a slight conical "orbit" tilt instead of pure side-to-side.
+  function bagState() {
+    const depthScale = 1 + 0.18 * Math.sin(ay);
+    const rotation = ax + ay * 0.15;
+    const neckX = pivot.x + Math.sin(ax) * SWIVEL_LEN;
+    const neckY = pivot.y + Math.cos(ax) * SWIVEL_LEN;
+    const bellyLen = BAG_H * 0.5 * depthScale;
     return {
-      x: pivot.x + Math.sin(ax) * SWIVEL_LEN,
-      y: pivot.y + Math.cos(ax) * SWIVEL_LEN * 0.35 + SWIVEL_LEN * 0.65 + Math.sin(ay) * 14,
-      depthScale
+      neckX, neckY, rotation, depthScale,
+      x: neckX + Math.sin(rotation) * bellyLen,
+      y: neckY + Math.cos(rotation) * bellyLen
     };
   }
 
   function punch(clickX, clickY) {
-    const b = bagPos();
+    const b = bagState();
     const dx = clickX - b.x;
     const dy = clickY - b.y;
     const dist = Math.hypot(dx, dy);
@@ -271,7 +280,7 @@
     ctx.stroke();
     ctx.restore();
 
-    const b = bagPos();
+    const b = bagState();
 
     // drop shadow on "floor" glow beneath
     const floorY = H - 40;
@@ -288,9 +297,7 @@
     ctx.restore();
 
     // swivel strap from mount to the bag's neck
-    const neckX = b.x;
-    const neckY = b.y - (BAG_H * 0.5) * b.depthScale;
-    drawSwivel(pivot.x, 18, neckX, neckY);
+    drawSwivel(pivot.x, 18, b.neckX, b.neckY);
 
     // impact rings
     for (let i = rings.length - 1; i >= 0; i--) {
@@ -308,7 +315,7 @@
       ctx.restore();
     }
 
-    drawBag(b.x, b.y, b.depthScale);
+    drawBag(b);
   }
 
   function roundRect(x, y, w, h, r) {
@@ -322,46 +329,47 @@
   }
 
   // teardrop / pear silhouette matching a real speed bag: narrow neck at
-  // top where the swivel strap attaches, bulging belly, rounded bottom tip
+  // top where the swivel strap attaches (local origin, y=0), bulging
+  // belly, rounded bottom tip at y=h. Anchoring at the neck (not the
+  // center) is what lets it swing like a real rigid pendulum bob.
   function bagPath(w, h) {
     const hw = w / 2;
     ctx.beginPath();
-    ctx.moveTo(0, -h / 2); // neck apex
-    ctx.bezierCurveTo(hw * 0.55, -h * 0.35, hw * 0.62, h * 0.15, hw * 0.5, h * 0.42);
-    ctx.bezierCurveTo(hw * 0.42, h * 0.58, hw * 0.18, h * 0.5, 0, h * 0.5);
-    ctx.bezierCurveTo(-hw * 0.18, h * 0.5, -hw * 0.42, h * 0.58, -hw * 0.5, h * 0.42);
-    ctx.bezierCurveTo(-hw * 0.62, h * 0.15, -hw * 0.55, -h * 0.35, 0, -h / 2);
+    ctx.moveTo(0, 0); // neck apex
+    ctx.bezierCurveTo(hw * 0.55, h * 0.15, hw * 0.62, h * 0.65, hw * 0.5, h * 0.92);
+    ctx.bezierCurveTo(hw * 0.42, h * 1.08, hw * 0.18, h, 0, h);
+    ctx.bezierCurveTo(-hw * 0.18, h, -hw * 0.42, h * 1.08, -hw * 0.5, h * 0.92);
+    ctx.bezierCurveTo(-hw * 0.62, h * 0.65, -hw * 0.55, h * 0.15, 0, 0);
     ctx.closePath();
   }
 
-  function drawBag(x, y, depthScale) {
-    const wobble = ax * 0.25; // tilts slightly in the direction of swing, like a real hanging bag
-    const w = BAG_W * depthScale * squash;
-    const h = BAG_H * depthScale * (2 - squash);
+  function drawBag(b) {
+    const w = BAG_W * b.depthScale * squash;
+    const h = BAG_H * b.depthScale * (2 - squash);
 
     ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(wobble);
+    ctx.translate(b.neckX, b.neckY);
+    ctx.rotate(b.rotation); // whole rigid body swings from the neck
 
     bagPath(w, h);
     ctx.save();
     ctx.clip();
 
     // base leather gradient: cyan neck fading to magenta belly
-    const base = ctx.createLinearGradient(0, -h / 2, 0, h / 2);
+    const base = ctx.createLinearGradient(0, 0, 0, h);
     base.addColorStop(0, '#00F7FF');
     base.addColorStop(0.55, '#7A5CFF');
     base.addColorStop(1, '#FA00FF');
     ctx.fillStyle = base;
-    ctx.fillRect(-w, -h, w * 2, h * 2);
+    ctx.fillRect(-w, -h * 0.2, w * 2, h * 1.4);
 
     // volume shading (darker toward the lower-right edge)
-    const shade = ctx.createRadialGradient(w * 0.2, -h * 0.15, w * 0.1, 0, h * 0.05, w * 1.3);
+    const shade = ctx.createRadialGradient(w * 0.2, h * 0.3, w * 0.1, 0, h * 0.55, w * 1.3);
     shade.addColorStop(0, 'rgba(255,255,255,0)');
     shade.addColorStop(0.7, 'rgba(0,0,0,0)');
     shade.addColorStop(1, 'rgba(0,0,0,0.5)');
     ctx.fillStyle = shade;
-    ctx.fillRect(-w, -h, w * 2, h * 2);
+    ctx.fillRect(-w, -h * 0.2, w * 2, h * 1.4);
 
     // horizontal seam band (equator stitching typical of a real speed bag)
     ctx.save();
@@ -370,7 +378,7 @@
     ctx.lineWidth = 2;
     ctx.setLineDash([4, 4]);
     ctx.beginPath();
-    ctx.ellipse(0, h * 0.08, w * 0.5, h * 0.06, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, h * 0.58, w * 0.5, h * 0.06, 0, 0, Math.PI * 2);
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.restore();
@@ -379,16 +387,16 @@
     ctx.strokeStyle = 'rgba(0,0,0,0.35)';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.moveTo(0, h * 0.1);
-    ctx.lineTo(0, h * 0.5);
+    ctx.moveTo(0, h * 0.6);
+    ctx.lineTo(0, h);
     ctx.stroke();
 
     // glossy specular highlight
-    const shine = ctx.createRadialGradient(-w * 0.28, -h * 0.15, 1, -w * 0.28, -h * 0.15, w * 0.5);
+    const shine = ctx.createRadialGradient(-w * 0.28, h * 0.35, 1, -w * 0.28, h * 0.35, w * 0.5);
     shine.addColorStop(0, 'rgba(255,255,255,0.8)');
     shine.addColorStop(1, 'rgba(255,255,255,0)');
     ctx.fillStyle = shine;
-    ctx.fillRect(-w, -h, w * 2, h * 2);
+    ctx.fillRect(-w, -h * 0.2, w * 2, h * 1.4);
 
     ctx.restore(); // undo clip
 
