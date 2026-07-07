@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Pad Work — ADHD LAB</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;700&display=swap" rel="stylesheet" />
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #000;
+    color: #fff;
+    font-family: 'Fredoka', sans-serif;
+    overflow: hidden;
+    height: 100%;
+    touch-action: none;
+  }
+  #hud {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 1.5rem;
+    z-index: 5;
+    pointer-events: none;
+  }
+  #hud a {
+    pointer-events: auto;
+    color: #00F7FF;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 0.9rem;
+    border: 1px solid #00F7FF;
+    padding: 0.4rem 0.9rem;
+    border-radius: 999px;
+    transition: all 0.2s ease;
+  }
+  #hud a:hover {
+    background: #00F7FF;
+    color: #000;
+  }
+  #stats {
+    text-align: right;
+    line-height: 1.3;
+  }
+  #stats .label {
+    font-size: 0.65rem;
+    letter-spacing: 3px;
+    color: #777;
+    text-transform: uppercase;
+  }
+  #score {
+    font-size: 2rem;
+    font-weight: 700;
+    color: #00F7FF;
+    text-shadow: 0 0 20px rgba(0,247,255,0.6);
+  }
+  #best {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #FA00FF;
+    text-shadow: 0 0 15px rgba(250,0,255,0.6);
+  }
+  #hint {
+    position: fixed;
+    bottom: 1.6rem;
+    left: 0;
+    right: 0;
+    text-align: center;
+    color: #666;
+    font-size: 0.8rem;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    z-index: 5;
+    pointer-events: none;
+    transition: opacity 0.6s ease;
+  }
+  #timerBar {
+    position: fixed;
+    top: 4.6rem;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(60vw, 320px);
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.08);
+    overflow: hidden;
+    z-index: 5;
+  }
+  #timerFill {
+    height: 100%;
+    width: 100%;
+    background: #00F7FF;
+    box-shadow: 0 0 12px rgba(0,247,255,0.8);
+    transform-origin: left center;
+  }
+  #flash {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0;
+    z-index: 2;
+    transition: opacity 0.25s ease;
+  }
+  #flash.miss { background: radial-gradient(circle, rgba(250,0,255,0) 40%, rgba(250,0,255,0.35) 100%); }
+  #flash.hit  { background: radial-gradient(circle, rgba(0,247,255,0) 40%, rgba(0,247,255,0.25) 100%); }
+  #flash.show { opacity: 1; }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+  <div id="hud">
+    <a href="index.html">&larr; ADHD LAB</a>
+    <div id="stats">
+      <div class="label">Score</div>
+      <div id="score">0</div>
+      <div id="best">BEST 0</div>
+    </div>
+  </div>
+
+  <div id="timerBar"><div id="timerFill"></div></div>
+  <div id="flash"></div>
+  <canvas id="pad"></canvas>
+  <div id="hint">Read the pad — tap for a jab, swipe toward it for a hook, swipe up for an uppercut</div>
+
+<script>
+(function () {
+  const canvas = document.getElementById('pad');
+  const ctx = canvas.getContext('2d');
+  const scoreEl = document.getElementById('score');
+  const bestEl = document.getElementById('best');
+  const hintEl = document.getElementById('hint');
+  const flashEl = document.getElementById('flash');
+  const timerFill = document.getElementById('timerFill');
+
+  let W, H, dpr;
+  function resize() {
+    dpr = window.devicePixelRatio || 1;
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    setTargetsFromLayout();
+  }
+
+  const PAD_R = 78; // base mitt radius
+
+  // where a coach would present the mitt for each punch, and which side
+  // of the pad the "catching face" (pocket) sits on so its posture alone
+  // tells the boxer what to throw
+  const LAYOUT = {};
+  function setTargetsFromLayout() {
+    LAYOUT.jab        = { x: W * 0.5,  y: H * 0.36, rot: 0,     pocket: { x: 0,    y: 0.28 }, armFrom: { x: W * 0.5, y: -40 } };
+    LAYOUT['left-hook']  = { x: W * 0.20, y: H * 0.40, rot: -1.25, pocket: { x: 0.55, y: 0 },    armFrom: { x: -60, y: H * 0.3 } };
+    LAYOUT['right-hook'] = { x: W * 0.80, y: H * 0.40, rot: 1.25,  pocket: { x: -0.55,y: 0 },    armFrom: { x: W + 60, y: H * 0.3 } };
+    LAYOUT.uppercut   = { x: W * 0.5,  y: H * 0.66, rot: 0.08,  pocket: { x: 0,   y: -0.6 },  armFrom: { x: W * 0.5, y: H + 60 } };
+  }
+
+  const moves = ['jab', 'left-hook', 'right-hook', 'uppercut'];
+
+  // current rendered state (springs toward target)
+  let cx = 0, cy = 0, crot = 0, cvx = 0, cvy = 0, cvr = 0;
+  let cSquash = 1, cSquashVel = 0;
+  let armX = 0, armY = 0, armVx = 0, armVy = 0;
+
+  let score = 0, best = 0;
+  let current = null;
+  let roundStart = 0;
+  let roundLimit = 1700;
+  let locked = false;
+  let settled = false; // pad has arrived at its spot, input now counts
+
+  function pickMove(excludeLast) {
+    let choice;
+    do { choice = moves[Math.floor(Math.random() * moves.length)]; }
+    while (choice === excludeLast && moves.length > 1);
+    return choice;
+  }
+
+  function startRound() {
+    locked = false;
+    settled = false;
+    current = pickMove(current);
+    hintEl.style.opacity = current === null ? '1' : '0';
+    // give the pad time to glide into position before the reaction window opens
+    const travelTime = 420;
+    setTimeout(() => {
+      if (locked) return;
+      settled = true;
+      roundStart = performance.now();
+      roundLimit = Math.max(900, 1700 - score * 18);
+    }, travelTime);
+  }
+
+  function flash(kind) {
+    flashEl.className = '';
+    void flashEl.offsetWidth;
+    flashEl.classList.add(kind, 'show');
+    setTimeout(() => flashEl.classList.remove('show'), 250);
+  }
+
+  function resolveRound(gesture) {
+    if (locked || !settled) return;
+    locked = true;
+
+    const hit = gesture === current;
+    if (hit) {
+      score++;
+      if (score > best) { best = score; bestEl.textContent = 'BEST ' + best; }
+      scoreEl.textContent = score;
+      flash('hit');
+      cSquashVel -= 6; // pad recoils from the punch
+    } else {
+      score = 0;
+      scoreEl.textContent = score;
+      flash('miss');
+    }
+
+    setTimeout(startRound, 300);
+  }
+
+  // ---- gesture detection: tap = jab, swipes = hooks/uppercut ----
+  const TAP_MAX_DIST = 20;
+  const TAP_MAX_TIME = 400;
+  const SWIPE_MIN_DIST = 32;
+  let startX = 0, startY = 0, startT = 0, tracking = false;
+
+  function pointFromEvent(e) {
+    if (e.touches && e.touches.length) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    if (e.changedTouches && e.changedTouches.length) return { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
+    return { x: e.clientX, y: e.clientY };
+  }
+  function onStart(e) {
+    const p = pointFromEvent(e);
+    startX = p.x; startY = p.y; startT = performance.now();
+    tracking = true;
+  }
+  function onEnd(e) {
+    if (!tracking) return;
+    tracking = false;
+    const p = pointFromEvent(e);
+    const dx = p.x - startX, dy = p.y - startY;
+    const dt = performance.now() - startT;
+    const dist = Math.hypot(dx, dy);
+
+    let gesture;
+    if (dist <= TAP_MAX_DIST && dt <= TAP_MAX_TIME) gesture = 'jab';
+    else if (Math.abs(dx) >= Math.abs(dy) && dist >= SWIPE_MIN_DIST) gesture = dx < 0 ? 'left-hook' : 'right-hook';
+    else if (dy < 0 && Math.abs(dy) > Math.abs(dx) && dist >= SWIPE_MIN_DIST) gesture = 'uppercut';
+    else gesture = 'none';
+
+    resolveRound(gesture);
+  }
+  document.addEventListener('mousedown', onStart);
+  document.addEventListener('mouseup', onEnd);
+  document.addEventListener('touchstart', (e) => { e.preventDefault(); onStart(e); }, { passive: false });
+  document.addEventListener('touchend', (e) => { e.preventDefault(); onEnd(e); }, { passive: false });
+
+  // ---- physics: critically-damped spring glides the pad to its target ----
+  const K = 70, D = 15.5;
+  let lastT = performance.now();
+  function step(now) {
+    let dt = (now - lastT) / 1000;
+    lastT = now;
+    dt = Math.min(dt, 0.033);
+
+    const target = LAYOUT[current] || LAYOUT.jab;
+
+    const axAccel = -K * (cx - target.x) - D * cvx;
+    cvx += axAccel * dt; cx += cvx * dt;
+    const ayAccel = -K * (cy - target.y) - D * cvy;
+    cvy += ayAccel * dt; cy += cvy * dt;
+    const arAccel = -K * (crot - target.rot) - D * cvr;
+    cvr += arAccel * dt; crot += cvr * dt;
+
+    const armXAccel = -K * (armX - target.armFrom.x) - D * armVx;
+    armVx += armXAccel * dt; armX += armVx * dt;
+    const armYAccel = -K * (armY - target.armFrom.y) - D * armVy;
+    armVy += armYAccel * dt; armY += armVy * dt;
+
+    const sqAccel = -60 * (cSquash - 1) - 7 * cSquashVel;
+    cSquashVel += sqAccel * dt; cSquash += cSquashVel * dt;
+
+    if (settled && !locked) {
+      const elapsed = now - roundStart;
+      const remain = Math.max(0, 1 - elapsed / roundLimit);
+      timerFill.style.transform = 'scaleX(' + remain + ')';
+      if (remain <= 0) resolveRound(null);
+    } else {
+      timerFill.style.transform = 'scaleX(1)';
+    }
+
+    draw(target);
+    requestAnimationFrame(step);
+  }
+
+  function draw(target) {
+    ctx.clearRect(0, 0, W, H);
+
+    // floor glow beneath the pad
+    ctx.save();
+    ctx.globalAlpha = 0.3;
+    const floorY = H - 30;
+    const grad = ctx.createRadialGradient(cx, floorY, 5, cx, floorY, PAD_R * 1.6);
+    grad.addColorStop(0, '#FA00FF');
+    grad.addColorStop(1, 'rgba(250,0,255,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.ellipse(cx, floorY, PAD_R * 1.6, PAD_R * 0.4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // coach's arm/strap running off-screen toward where the pad is held from
+    ctx.save();
+    ctx.strokeStyle = '#2a2a2a';
+    ctx.lineWidth = 22;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(armX, armY);
+    ctx.lineTo(cx, cy);
+    ctx.stroke();
+    ctx.strokeStyle = '#161616';
+    ctx.lineWidth = 10;
+    ctx.beginPath();
+    ctx.moveTo(armX, armY);
+    ctx.lineTo(cx, cy);
+    ctx.stroke();
+    ctx.restore();
+
+    drawMitt(target);
+  }
+
+  function drawMitt(target) {
+    // width narrows as the mitt turns edge-on (hooks), giving real
+    // perspective so the pad's own posture reads as the punch to throw
+    const rx = PAD_R * (0.5 + 0.5 * Math.abs(Math.cos(crot))) * cSquash;
+    const ry = PAD_R * (2 - cSquash) * 0.62;
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(Math.sin(crot) * 0.5);
+
+    // wrist cuff where the strap meets the mitt
+    ctx.save();
+    ctx.fillStyle = '#1c1c1c';
+    ctx.strokeStyle = '#00F7FF';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.ellipse(0, ry * 0.15, rx * 0.55, ry * 0.35, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+
+    // main mitt face
+    ctx.save();
+    ctx.shadowColor = '#00F7FF';
+    ctx.shadowBlur = 30;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+    const base = ctx.createRadialGradient(-rx * 0.3, -ry * 0.3, rx * 0.1, 0, 0, rx * 1.2);
+    base.addColorStop(0, '#8FFBFF');
+    base.addColorStop(0.45, '#00F7FF');
+    base.addColorStop(1, '#0090A0');
+    ctx.fillStyle = base;
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(0,20,23,0.7)';
+    ctx.stroke();
+    ctx.restore();
+
+    // catching pocket — a soft shadow disc whose position on the face
+    // shows which direction the punch should land from
+    const pocket = target.pocket;
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+    ctx.clip();
+    const px = pocket.x * rx * 1.4;
+    const py = pocket.y * ry * 1.4;
+    const pocketGrad = ctx.createRadialGradient(px, py, 2, px, py, rx * 0.7);
+    pocketGrad.addColorStop(0, 'rgba(0,10,12,0.55)');
+    pocketGrad.addColorStop(1, 'rgba(0,10,12,0)');
+    ctx.fillStyle = pocketGrad;
+    ctx.fillRect(-rx, -ry, rx * 2, ry * 2);
+
+    // cross-strap stitching detail
+    ctx.strokeStyle = 'rgba(0,20,23,0.4)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-rx, 0); ctx.lineTo(rx, 0);
+    ctx.moveTo(0, -ry); ctx.lineTo(0, ry);
+    ctx.stroke();
+    ctx.restore();
+
+    // outer rim
+    ctx.beginPath();
+    ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(0,247,255,0.9)';
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+  cx = LAYOUT.jab.x; cy = LAYOUT.jab.y;
+  armX = LAYOUT.jab.armFrom.x; armY = LAYOUT.jab.armFrom.y;
+  startRound();
+  requestAnimationFrame(step);
+})();
+</script>
+</body>
+</html>
